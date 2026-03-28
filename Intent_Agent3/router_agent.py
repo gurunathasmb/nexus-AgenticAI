@@ -36,6 +36,8 @@ class RouterAgent(BaseAgent):
         domain = intent_result.text
         meta = intent_result.metadata
 
+        downstream_meta = {**(message.metadata or {}), **meta}
+
         # Step 2: handle based on classification outcome
         if domain == "CLARIFICATION_REQUIRED":
             return Message(
@@ -55,8 +57,26 @@ class RouterAgent(BaseAgent):
         # Single resolved domain — route to domain handler or LLM
         single = domains[0]
 
-        if single in ("results", "syllabus", "faculty"):
-            result = await dispatcher.dispatch(message, "student_agent")
+        if single == "results":
+            enriched = Message(
+                sender=message.sender,
+                text=message.text,
+                metadata=downstream_meta,
+            )
+            result = await dispatcher.dispatch(enriched, "table_agent")
+            return Message(
+                sender=result.sender,
+                text=result.text,
+                metadata=meta,
+            )
+
+        if single in ("syllabus", "faculty"):
+            enriched = Message(
+                sender=message.sender,
+                text=message.text,
+                metadata=downstream_meta,
+            )
+            result = await dispatcher.dispatch(enriched, "student_agent")
             return Message(
                 sender=result.sender,
                 text=result.text,

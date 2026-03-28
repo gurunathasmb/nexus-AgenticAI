@@ -41,3 +41,11 @@ yarn-error.log*
 #PlanDocs
 ChatBot Development Plan.md
 IMPLEMENTATION_PLAN.md
+API_Integrations/nexus_chat.sqlite
+
+# Local Python / tooling
+Intent_Agent3/.venv/
+*.bak
+
+# CRA production build
+frontend/build/
