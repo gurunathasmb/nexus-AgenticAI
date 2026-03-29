@@ -4,7 +4,8 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 
-load_dotenv()
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_REPO_ROOT, ".env"))
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,10 +14,11 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from API_Integrations.db.setup import get_db
+from API_Integrations.db.setup import get_db, using_sqlite
 from Intent_Agent3 import init_agents
 from Intent_Agent3.registry import dispatcher
 from Intent_Agent3.base import Message
+from table_agent.api import router as table_agent_router
 
 # Folder to save intent classification JSONs
 INTENT_LOGS_DIR = os.path.join(
@@ -38,6 +40,8 @@ app.add_middleware(
 # Initialize all agents on startup
 init_agents()
 
+app.include_router(table_agent_router, prefix="/table-agent", tags=["table-agent"])
+
 
 # ── Chat routes ──────────────────────────────────────────────────────────
 
@@ -45,13 +49,21 @@ init_agents()
 @app.post("/chat/session")
 def create_session(conn=Depends(get_db)):
     cursor = conn.cursor()
-    cursor.execute("""
-    INSERT INTO ChatSessions (user_id, title)
-    OUTPUT INSERTED.id
-    VALUES (?, ?)
-    """, 1, "New Chat Session")
-    session_id = cursor.fetchone()[0]
-    conn.commit()
+    if using_sqlite():
+        cursor.execute(
+            "INSERT INTO ChatSessions (user_id, title) VALUES (?, ?)",
+            (1, "New Chat Session"),
+        )
+        conn.commit()
+        session_id = cursor.lastrowid
+    else:
+        cursor.execute("""
+        INSERT INTO ChatSessions (user_id, title)
+        OUTPUT INSERTED.id
+        VALUES (?, ?)
+        """, (1, "New Chat Session"))
+        session_id = cursor.fetchone()[0]
+        conn.commit()
     return {"session_id": session_id}
 
 
@@ -63,7 +75,7 @@ async def send_message(session_id: int, text: str, persona: str = "default", con
     cursor.execute("""
     INSERT INTO ChatMessages (session_id, role, text)
     VALUES (?, ?, ?)
-    """, session_id, "user", text)
+    """, (session_id, "user", text))
     conn.commit()
 
     # dispatch through router with persona metadata
@@ -88,7 +100,7 @@ async def send_message(session_id: int, text: str, persona: str = "default", con
     cursor.execute("""
     INSERT INTO ChatMessages (session_id, role, sender_agent, text)
     VALUES (?, ?, ?, ?)
-    """, session_id, "agent", response.sender, response.text)
+    """, (session_id, "agent", response.sender, response.text))
     conn.commit()
 
     # return response + intent metadata
@@ -122,7 +134,7 @@ def get_history(session_id: int, conn=Depends(get_db)):
     FROM ChatMessages
     WHERE session_id = ?
     ORDER BY timestamp
-    """, session_id)
+    """, (session_id,))
     rows = cursor.fetchall()
     return [
         {"role": r[0], "sender_agent": r[1], "text": r[2], "timestamp": str(r[3])}
@@ -185,7 +197,7 @@ async def classify_intent(req: IntentRequest):
 def list_agents():
     return [
         {"name": name, "enabled": agent.enabled}
-        for name, agent in dispatcher.agents.items()
+        for name, agent in sorted(dispatcher.agents.items(), key=lambda x: x[0])
     ]
 
 
