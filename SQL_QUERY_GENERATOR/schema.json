@@ -1,4 +1,12 @@
 {
-    "student": ["id", "name", "year"],
-    "marks": ["student_id", "subject", "marks"]
+  "schema": "aiml_academic",
+  "tables": {
+    "semesters": ["semester_no", "study_year", "semester_label"],
+    "students": ["student_usn", "student_name", "admission_year"],
+    "subjects": ["subject_code", "subject_label"],
+    "result_sessions": ["session_id", "source_folder_year", "semester_no", "session_label", "study_year", "result_scale"],
+    "session_subjects": ["session_subject_id", "session_id", "subject_code", "subject_order"],
+    "student_semester_results": ["semester_result_id", "session_id", "student_usn", "student_name_snapshot", "sgpa", "percentage", "grand_total"],
+    "student_subject_results": ["subject_result_id", "semester_result_id", "session_subject_id", "raw_result", "numeric_marks", "grade_text", "result_kind"]
+  }
 }

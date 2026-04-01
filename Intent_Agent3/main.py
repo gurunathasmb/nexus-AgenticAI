@@ -20,6 +20,7 @@ from Intent_Agent3.registry import dispatcher
 from Intent_Agent3.base import Message
 from table_agent.api import router as table_agent_router
 from column_pruning_agent.router import router as column_pruning_router
+from SQL_QUERY_GENERATOR.app import router as sql_router
 
 # Folder to save intent classification JSONs
 INTENT_LOGS_DIR = os.path.join(
@@ -43,6 +44,7 @@ init_agents()
 
 app.include_router(table_agent_router, prefix="/table-agent", tags=["table-agent"])
 app.include_router(column_pruning_router, prefix="/column-pruning", tags=["column-pruning"])
+app.include_router(sql_router, prefix="/sql-agent", tags=["sql-agent"])
 
 
 # ── Chat routes ──────────────────────────────────────────────────────────
@@ -169,21 +171,15 @@ class IntentRequest(BaseModel):
 
 @app.post("/intent/classify")
 async def classify_intent(req: IntentRequest):
-    """
-    Classify a query and save the full intent JSON to API_Integrations/intent_logs/.
-    This JSON can be forwarded to the next agent (e.g. Table Agent).
-    """
     from Intent_Agent3.intent_agent import HierarchicalIntentAgent
 
     agent = dispatcher.get("intent_agent")
     result = agent.classify(req.query, req.persona)
 
-    # Add the original query and timestamp
     result["query"] = req.query
     result["persona"] = req.persona
     result["timestamp"] = datetime.now().isoformat()
 
-    # Save to file
     filename = f"intent_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.json"
     filepath = os.path.join(INTENT_LOGS_DIR, filename)
     with open(filepath, "w", encoding="utf-8") as f:
