@@ -1,81 +1,101 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from sql_agent import generate_sql
-from prometheus_fastapi_instrumentator import Instrumentator
+import sys
+import os
 import logging
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fastapi import FastAPI, APIRouter, HTTPException
+from pydantic import BaseModel
+from sql_agent import generate_sql_with_agent
+import uvicorn
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL)
+logger = logging.getLogger("sql-query-generator")
 
-app = FastAPI(
-    title="SQL Query Generator API",
-    description="API to convert natural language to SQL queries using AI",
-    version="1.0.0"
-)
+# --------------------------------------------------
+# Router — so this can be imported into main.py
+# just like table_agent
+# --------------------------------------------------
+router = APIRouter()
 
-# Expose /metrics endpoint for Prometheus scraping
-Instrumentator().instrument(app).expose(app)
+class TableHint(BaseModel):
+    table: str
+    score: float = 0.0
+    source_file: str = ""
+    table_id: str = ""
 
-class QueryRequest(BaseModel):
+class SQLRequest(BaseModel):
     query: str
+    intent: str = ""
+    confidence: float = None
+    entities: dict = {}
+    tables: list[TableHint] = []
+    pruned_columns: list[str] = []
+    removed_columns: list[str] = []
+    column_reasons: dict = {}
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "query": "Get all students who scored more than 90 in Math"
-            }
-        }
-
-class QueryResponse(BaseModel):
+class SQLResponse(BaseModel):
     sql: str
     input_query: str
+    intent: str = ""
+    tables_used: list[str] = []
+    columns_used: list[str] = []
+    status: str = "success"
 
-@app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "service": "SQL Query Generator",
-        "version": "1.0.0"
-    }
+@router.get("/health")
+def health():
+    return {"status": "healthy", "service": "SQL Query Generator"}
 
-@app.get("/health")
-async def health():
-    """Health check endpoint for Kubernetes"""
-    return {"status": "healthy"}
+@router.post("/generate-sql", response_model=SQLResponse)
+def generate_sql(request: SQLRequest):
+    logger.info(f"Received query: {request.query}")
 
-@app.post("/generate-sql", response_model=QueryResponse)
-async def generate_sql_endpoint(request: QueryRequest):
-    """
-    Generate SQL query from natural language input
+    enriched_query = request.query
 
-    Args:
-        request: QueryRequest containing the natural language query
+    if request.intent:
+        enriched_query += f"\n[Intent: {request.intent}]"
 
-    Returns:
-        QueryResponse with generated SQL and original query
-    """
+    table_names = []
+    if request.tables:
+        table_names = [t.table for t in request.tables]
+        enriched_query += f"\n[Relevant tables: {', '.join(table_names)}]"
+
+    if request.pruned_columns:
+        enriched_query += f"\n[Use ONLY these columns: {', '.join(request.pruned_columns)}]"
+
+    if request.entities:
+        entity_str = ", ".join(f"{k}={v}" for k, v in request.entities.items())
+        enriched_query += f"\n[Entities: {entity_str}]"
+
     try:
-        logger.info(f"Received query: {request.query}")
-        sql = generate_sql(request.query)
+        sql = generate_sql_with_agent(enriched_query)
         logger.info(f"Generated SQL: {sql}")
-
-        return QueryResponse(
-            sql=str(sql),
-            input_query=request.query
+        return SQLResponse(
+            sql=sql,
+            input_query=request.query,
+            intent=request.intent,
+            tables_used=table_names,
+            columns_used=request.pruned_columns,
+            status="success"
         )
+    except ValueError as e:
+        logger.warning(f"Validation error: {e}")
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        logger.error(f"Error generating SQL: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate SQL: {str(e)}"
-        )
+        logger.error(f"Agent error: {e}")
+        raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
+
+
+# --------------------------------------------------
+# Standalone mode — python app.py still works
+# --------------------------------------------------
+app = FastAPI(
+    title="SQL Query Generator",
+    description="Converts natural language into SQL queries.",
+    version="1.0.0"
+)
+app.include_router(router)
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
 
 
