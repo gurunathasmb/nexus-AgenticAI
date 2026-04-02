@@ -369,3 +369,34 @@ else:
 ```
 
 This is the same contract used by `evaluate.py` and is suitable for hooking into your Query Generator Agent or other microservices.
+
+---
+
+## 🔒 Hardened Security & `aiml_academic` Schema
+
+This validator has been updated to provide robust protection against SQL Injection and has been integrated with the `aiml_academic` schema (`results_aiml_normalized_postgres.sql`).
+
+### Security Features
+1. **Single Statement Enforcement**: The validator uses `sqlparse` to guarantee that exactly **one** statement is executed. Stacked queries (e.g., `SELECT ... ; DROP TABLE ...`) are strictly blocked.
+2. **SELECT Only Policy**: Non-read commands (e.g., `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`) are blocked by verifying the parsed AST root.
+3. **Keyword Blacklisting**: Naive attempts to disguise dangerous clauses or using unauthorized semicolons/comments in payloads will fail before hitting the DB engine.
+4. **Safe EXPLAIN Validation**: The PostgreSQL syntax check via `EXPLAIN` runs under a strict Transaction scope that is immediately rolled back for ultimate safety.
+
+### Schema Validation
+It directly reflects and enforces the columns created by the new aiml_academic schema.
+- Replaces generic `year` and `semester` validation with explicitly bounded properties: `study_year` (1-4) and `semester_no` (1-8).
+
+### Sample Script Evaluation
+We have included `test_queries.sh` and `test_queries.ps1` which enlist all sample commands demonstrating valid `aiml_academic` reads versus blocked SQL Injection scenarios.
+
+Run it directly from a secondary terminal while `app.py` runs on your primary:
+
+**Linux / Git Bash:**
+```bash
+./test_queries.sh
+```
+
+**Windows PowerShell:**
+```powershell
+.\test_queries.ps1
+```

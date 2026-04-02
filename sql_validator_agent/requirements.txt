@@ -5,4 +5,3 @@ sqlalchemy
 psycopg2-binary
 pytest
 requests
-prometheus-fastapi-instrumentator==6.1.0
