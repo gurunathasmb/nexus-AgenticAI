@@ -1,73 +1,23 @@
-import re
-import os
-from crewai import Agent, Task, Crew, LLM
-
-# --------------------------------------------------
-# Config from environment variables (Docker/K8s ready)
-# --------------------------------------------------
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-LLM_MODEL   = os.getenv("LLM_MODEL", "llama3:latest")
-LLM_TEMP    = float(os.getenv("LLM_TEMPERATURE", "0.0"))
-
-# Use CrewAI's native LLM class with ollama/ prefix
-llm = LLM(
-    model=f"ollama/{LLM_MODEL}",
-    base_url=OLLAMA_HOST,
-    temperature=LLM_TEMP
-)
-
-# --------------------------------------------------
-# Guardrails
-# --------------------------------------------------
-ALLOWED_TABLES = [
-    "semesters",
-    "students",
-    "subjects",
-    "result_sessions",
-    "session_subjects",
-    "student_semester_results",
-    "student_subject_results"
-]
-
-FORBIDDEN_KEYWORDS = [
-    "delete", "drop", "update", "insert", "alter",
-    "truncate", "create", "replace"
-]
-
-
-def guardrail_check(sql_query: str) -> str:
-    """Reject forbidden SQL keywords and tables not in the allowed schema."""
-
-    sql_lower = sql_query.lower()
-
-    # 1. Block forbidden DML/DDL (whole-word match to avoid blocking
-    #    column names like "created_at")
-    for keyword in FORBIDDEN_KEYWORDS:
-        if re.search(rf'\b{keyword}\b', sql_lower):
-            raise ValueError(
-                f"Forbidden SQL keyword detected: '{keyword}'. "
-                "Only SELECT queries are allowed."
-            )
-
-    # 2. Block tables not in the schema
-    tables_used = re.findall(r'(?:FROM|JOIN)\s+(?:aiml_academic\.)?(\w+)', sql_query, re.IGNORECASE)
-    for table in tables_used:
-        if table.lower() not in ALLOWED_TABLES:
-            raise ValueError(
-                f"Invalid table referenced: '{table}'. Not in allowed schema."
-            )
-
-    return sql_query
-
+from openai import OpenAI
 
 # --------------------------------------------------
 # Main agent function
 # --------------------------------------------------
 def generate_sql_with_agent(user_query: str) -> str:
     """
-    Accepts a natural language query (optionally pre-enriched with
-    intent/entities from the Intent Agent) and returns a safe SQL query.
+    Accepts a natural language query and returns a safe SQL query directly via LLM.
     """
+    api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+    is_nv = api_key.startswith("nvapi-")
+    
+    kwargs = {"api_key": api_key, "timeout": 10.0}
+    if is_nv:
+        kwargs["base_url"] = "https://integrate.api.nvidia.com/v1"
+        model = "meta/llama-3.1-8b-instruct"
+    else:
+        model = "gpt-3.5-turbo"
+        
+    client = OpenAI(**kwargs)
 
     prompt = f"""
 You are an expert SQL generator for a college academic results system.
@@ -113,30 +63,12 @@ User query:
 {user_query}
 """
 
-    sql_agent = Agent(
-        role="SQL Generator",
-        goal="Convert natural language queries into correct PostgreSQL SELECT statements",
-        backstory="You are a senior database engineer expert in writing clean, safe SQL for academic databases.",
-        llm=llm,
-        verbose=False
+    completion = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": prompt}]
     )
-
-    task = Task(
-        description=prompt,
-        expected_output="A single SQL SELECT query with no markdown, no explanation.",
-        agent=sql_agent
-    )
-
-    crew = Crew(
-        agents=[sql_agent],
-        tasks=[task],
-        verbose=False
-    )
-
-    result = crew.kickoff()
-
-    # --- Robust SQL extraction ---
-    sql_query = str(result)
+    
+    sql_query = completion.choices[0].message.content.strip()
 
     # Strip markdown code fences if LLM added them
     sql_query = sql_query.replace("```sql", "").replace("```", "").strip()

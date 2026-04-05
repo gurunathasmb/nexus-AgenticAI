@@ -199,14 +199,14 @@ function Chatbot() {
           <h4 style={{ margin: '0 0 12px', fontSize: '0.8rem', color: 'var(--accent-color)', textTransform: 'uppercase' }}>Active Agents</h4>
           {agents.map(a => (
             <div key={a.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '0.85rem' }}>
-              <span style={{ opacity: a.enabled ? 1 : 0.5 }}>{a.enabled ? '●' : '○'} {a.name}</span>
+              <span style={{ opacity: a.enabled ? 1 : 0.5 }}>{a.enabled ? '● ONLINE' : '○ OFFLINE'} - {a.name}</span>
               <button
                 onClick={() => toggleAgent(a.name, a.enabled)}
                 style={{
                   background: 'none', border: '1px solid var(--border-color)', color: 'white', borderRadius: '4px', fontSize: '10px', padding: '2px 6px', cursor: 'pointer'
                 }}
               >
-                {a.enabled ? 'OFF' : 'ON'}
+                {a.enabled ? 'DISABLE' : 'ENABLE'}
               </button>
             </div>
           ))}
