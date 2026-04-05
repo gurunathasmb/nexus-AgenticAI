@@ -36,9 +36,10 @@ except ImportError:
     ColumnPruningAgent = None
 
 try:
-    from SQL_QUERY_GENERATOR.sql_agent import generate_sql_with_agent
+    from SQL_QUERY_GENERATOR.sql_agent import generate_sql_with_agent, generate_sql_with_correction
 except ImportError:
     generate_sql_with_agent = None
+    generate_sql_with_correction = None
 
 try:
     from sql_validator_agent.validator import SQLValidator
@@ -113,6 +114,7 @@ class SyntheticAgent:
         
         context_str = ""
         sql_query = ""
+        rows = []
         
         if not is_conversational:
             # 2. Table & Column Pruning Phase (Parallelized where possible)
@@ -182,18 +184,28 @@ class SyntheticAgent:
                     reasoning += " | SQL Validation: Passed Check."
             
             if should_execute:
-                # Execute against the database!
+                # 5. Execute SQL (with Self-Healing Loop)
                 try:
                     from sqlalchemy import create_engine, text as sqla_text
                     engine = create_engine(DB_URL)
                     with engine.connect() as conn:
-                        result = conn.execute(sqla_text(sql_query))
-                        # Fetch all rows for progression analysis
+                        try:
+                            result = conn.execute(sqla_text(sql_query))
+                        except Exception as first_err:
+                            # SELF-HEALING LOOP: Retry with correction
+                            reasoning += f" | SQL Error: {str(first_err)[:50]}... Healing..."
+                            if generate_sql_with_correction:
+                                sql_query = await asyncio.to_thread(generate_sql_with_correction, text, sql_query, str(first_err))
+                                result = conn.execute(sqla_text(sql_query))
+                                reasoning += " | SQL: Self-Healed."
+                            else: raise first_err
+
+                        # Fetch rows for analysis
                         rows = [dict(row._mapping) for row in result.fetchmany(20)]
                         context_str += f"\nDatabase Execution Results: {rows}"
                         reasoning += f" | DB Execution: Fetched {len(rows)} rows."
-                except Exception as db_err:
-                    reasoning += f" | DB Execution: Failed ({db_err})"
+                except Exception as final_err:
+                    reasoning += f" | DB Execution: Permanent Failure ({final_err})"
 
         # 5. Intelligence Phase: Math & Ambiguity Handling
         final_context = context_str
@@ -215,22 +227,30 @@ class SyntheticAgent:
         except Exception:
             pass
 
-        # 6. Final LLM Generation (Premium Synthesis v4)
-        prompt = f"""You are the AIML Nexus Senior Academic Analyst (v4 Premium).
-Your goal is to provide a highly professional, ORIGINAL narrative report OR a friendly conversational response.
+        # 6. Dynamic Template Selection (Pro Synthesis v7)
+        # Select Report Template based on data volume
+        if len(rows) > 1:
+            template_name = "TREND_ANALYST_PRO"
+            dynamic_instruction = "You are a Trend Analyst. Create a professional trajectory report with growth insights and tables."
+        elif len(rows) == 1:
+            template_name = "PERFORMANCE_SNAPSHOT"
+            dynamic_instruction = "You are a Performance Analyst. Create a crisp, high-impact snapshot card for this specific record."
+        else:
+            template_name = "CONVERSATIONAL"
+            dynamic_instruction = "Be friendly and conversational if the user is chatting. If they are asking for data, professionally state 'Record Not Found'."
+
+        prompt = f"""You are the AIML Nexus Senior Academic Analyst (v7 {template_name}).
+{dynamic_instruction}
 
 User Query: "{text}"
-Detected Intent: {intent}
 Database Result Summary: 
 {final_context if final_context.strip() else "(No records found.)"}
 
 REPORTING GUIDELINES:
-1. CONVERSATIONAL FREEDOM: If the user is just saying 'Hi', 'Thanks', or chatting (Detected Intent: CLARIFICATION_REQUIRED or similar), respond naturally and professionally. Do NOT say 'Record Not Found'.
-2. ACADEMIC SOPHISTICATION: If students are found, tell a story of academic progression. (e.g. "I have analyzed the performance trajectory for [Name]...")
-3. MATH VERIFICATION: If 'CALCULATED_CGPA' is present, lead with it as the verified cumulative standing.
-4. TABLE EXCELLENCE: Use professional Markdown tables for any academic results.
-5. STRICT SILENCE (DATA ONLY): If the user asks for a SPECIFIC student/result and nothing is found, report "Record Not Found". NEVER make up progression data if the academic context is empty.
-6. NO HALLUCINATION: If a value is missing (NULL/N/A), report it as such.
+1. MATH VERIFICATION: If 'CALCULATED_CGPA' is present, use it as the ground truth.
+2. PROFESSIONALISM: Use clear Markdown formatting.
+3. ADAPTIVE: {dynamic_instruction}
+4. NO HALLUCINATION: Never make up data.
 """
 
         try:
