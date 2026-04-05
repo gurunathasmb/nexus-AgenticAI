@@ -11,8 +11,8 @@ from psycopg2.extras import RealDictCursor
 
 
 def _database_url() -> str:
-    # Use Postgres if set, but we will fallback to SQLite if Postgres is empty or missing
-    return os.getenv("AIML_RESULTS_DATABASE_URL", "").strip()
+    # Use Postgres globally across the nexus platform
+    return os.getenv("AIML_RESULTS_DATABASE_URL", "postgresql://admin01:aiml1203@185.197.251.236:5432/nexus")
 
 
 def _sqlite_db_path() -> str:

@@ -8,6 +8,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from synthetic_agent import SyntheticAgent
+from db_modifier import db_modifier
 
 app = FastAPI()
 
@@ -68,6 +69,15 @@ async def send_message(session_id: str, text: str, persona: str = "default"):
     # Save to history
     sessions[session_id]["history"].append({"user": text, "bot": result["response"]})
     
+    return result
+
+
+@app.post("/chat/modify")
+async def modify_database(text: str, email: str):
+    """
+    Direct endpoint for INSERT/UPDATE operations.
+    """
+    result = await db_modifier.process_modification(text, email)
     return result
 
 if __name__ == "__main__":

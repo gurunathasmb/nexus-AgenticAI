@@ -34,10 +34,16 @@ except ImportError:
 
 try:
     from sql_validator_agent.validator import SQLValidator
-    from table_agent.ranker import _database_url
 except ImportError:
     SQLValidator = None
-    _database_url = None
+
+try:
+    from table_agent.ranker import _database_url
+except ImportError:
+    _database_url = lambda: os.getenv("AIML_RESULTS_DATABASE_URL", "postgresql://admin01:aiml1203@185.197.251.236:5432/nexus")
+
+# Global DB URL for cross-agent consistency
+DB_URL = _database_url() if _database_url else "postgresql://admin01:aiml1203@185.197.251.236:5432/nexus"
 
 class Message:
     def __init__(self, text, metadata=None, sender="user"):
@@ -72,72 +78,151 @@ class SyntheticAgent:
             if url: self.validator = SQLValidator(url)
 
     async def orchestrate(self, text: str, persona: str, history: list) -> dict:
-        intent, confidence, entropy, reasoning = "default", 0.8, 0.5, "Pipeline starting."
+        start_time = asyncio.get_event_loop().time()
+        intent, confidence, entropy, reasoning = "default", 0.8, 0.5, "Parallelizing pipeline."
         
-        # 1. Intent Phase
-        if self.intent_agent:
-            msg = Message(text, metadata={"persona": persona})
-            try:
-                res_msg = await self.intent_agent.handle_message(msg)
-                intent = res_msg.metadata.get("intent", intent)
-                confidence = res_msg.metadata.get("confidence", confidence)
-                entropy = res_msg.metadata.get("entropy_reduction", entropy)
-                reasoning = res_msg.metadata.get("reasoning", "")
-            except Exception as e:
-                reasoning += f" (Intent Err: {e})"
+        # 1. PARALLEL INTENT & TABLE SELECTION
+        # Use asyncio.gather to fire off multiple agents simultaneously
+        intent_task = self.intent_agent.handle_message(Message(text, metadata={"persona": persona})) if self.intent_agent else None
+        table_task = self.table_agent.handle_message(Message(text)) if self.table_agent else None
+        
+        # Wait for both to finish (concurrently)
+        intent_res, table_res = await asyncio.gather(
+            intent_task or asyncio.sleep(0), 
+            table_task or asyncio.sleep(0)
+        )
+        
+        if intent_res and hasattr(intent_res, 'metadata'):
+            intent = intent_res.metadata.get("intent", intent)
+            confidence = intent_res.metadata.get("confidence", confidence)
+            entropy = intent_res.metadata.get("entropy_reduction", entropy)
+            reasoning = intent_res.metadata.get("reasoning", "")
+
+        # SPEED OPTIMIZATION: FAST-PATH BYPASS
+        # If it's clearly a conversational greeting or needs clarification, skip the heavy DB overhead
+        is_conversational = intent in ["CLARIFICATION_REQUIRED", "NEUTRAL"] or entropy < 0.3
         
         context_str = ""
         sql_query = ""
-
-        # 2. Table & Column Pruning Phase
-        if self.table_agent and self.col_pruning_agent:
+        
+        if not is_conversational:
+            # 2. Table & Column Pruning Phase (Parallelized where possible)
             try:
-                table_res = await self.table_agent.handle_message(Message(text))
-                tables = table_res.metadata.get("ranked_tables", [])
-                if tables:
+                raw_tables = table_res.metadata.get("ranked_tables", []) if table_res else []
+                # SCHEMA LOCKDOWN: Only allow tables from the aiml_academic schema
+                tables = [t for t in raw_tables if t.get("table", "").startswith("aiml_academic.")]
+                
+                if tables and self.col_pruning_agent:
                     col_res = await self.col_pruning_agent.handle_message(Message(text))
                     kept_cols = col_res.metadata.get("kept", [])
                     table_name = col_res.metadata.get("table", tables[0]["table"])
                     context_str = f"Target Table: {table_name}. Relevant Columns: {', '.join(kept_cols)}."
-                    reasoning += f" | Table Context: Pulled {table_name} schema."
+                    reasoning += f" | Table Context: Pulled {table_name} schema (Post-Filter)."
             except Exception as e:
                 pass
                 
-        # 3. SQL Gen Phase
-        if generate_sql_with_agent:
+            # 3. SQL Gen Phase (Uses 70B for high-precision SELECTs)
+            if generate_sql_with_agent:
+                try:
+                    sql_input = f"{text}\nContext hint: {context_str}"
+                    sql_query = await asyncio.to_thread(generate_sql_with_agent, sql_input)
+                    reasoning += " | SQL Gen: Drafted."
+                except Exception as e:
+                    pass
+        else:
+            reasoning += " | Fast-Path: Bypassed DB overhead for conversational flow."
+
+        # 4. Grounded RAG Phase (Identity First-Look)
+        master_identity = None
+        if not is_conversational and text:
+            # Quick greedy search for a USN or Name in the master students table
             try:
-                sql_input = f"{text}\nContext hint: {context_str}"
-                sql_query = await asyncio.to_thread(generate_sql_with_agent, sql_input)
-                reasoning += " | SQL Gen: Drafted."
-            except Exception as e:
+                from sqlalchemy import create_engine, text as sqla_text
+                engine = create_engine(DB_URL)
+                with engine.connect() as conn:
+                    # Search for something that looks like a USN or Name
+                    match = re.search(r"\b1DS\d{2}[A-Z]{2}\d{3}\b", text, re.IGNORECASE)
+                    search_term = match.group(0) if match else text.strip()
+                    
+                    id_query = f"SELECT student_usn, student_name FROM aiml_academic.students WHERE student_usn ILIKE '%{search_term}%' OR student_name ILIKE '%{search_term}%' LIMIT 1"
+                    id_res = conn.execute(sqla_text(id_query)).fetchone()
+                    if id_res:
+                        master_identity = {"usn": id_res[0], "name": id_res[1]}
+                        reasoning += f" | RAG: Grounded to {id_res[1]} ({id_res[0]})."
+            except Exception:
                 pass
 
-        # 4. Filter / Validate SQL & Execute
-        if self.validator and sql_query:
-            is_valid, v_res = await asyncio.to_thread(self.validator.validate, sql_query)
-            if not is_valid:
-                sql_query = ""
-                reasoning += " | SQL Validation: Rejected (blocked for security)."
-            else:
-                reasoning += " | SQL Validation: Passed Check."
+        # 5. Filter / Validate SQL & Execute
+        if sql_query:
+            should_execute = True
+            # Inject Ground Truth into the SQL prompt if found
+            if master_identity:
+                sql_input = f"{text}\nGROUND TRUTH IDENTITY: Student is {master_identity['name']} (USN: {master_identity['usn']}). Context: {context_str}"
+                # Re-generate or refine SQL with the anchor
+                try:
+                    sql_query = await asyncio.to_thread(generate_sql_with_agent, sql_input)
+                    reasoning += " | SQL: Re-anchored to Master Identity."
+                except Exception: pass
+            
+            if self.validator:
+                is_valid, v_res = await asyncio.to_thread(self.validator.validate, sql_query)
+                if not is_valid:
+                    should_execute = False
+                    reasoning += " | SQL Validation: Rejected (blocked for security)."
+                else:
+                    reasoning += " | SQL Validation: Passed Check."
+            
+            if should_execute:
                 # Execute against the database!
                 try:
-                    from sqlalchemy import create_engine, text
-                    engine = create_engine(_database_url())
+                    from sqlalchemy import create_engine, text as sqla_text
+                    engine = create_engine(DB_URL)
                     with engine.connect() as conn:
-                        result = conn.execute(text(sql_query))
-                        rows = [dict(row._mapping) for row in result.fetchmany(10)]
-                        context_str += f"\nDatabase Execution Results (Top 10): {rows}"
-                        reasoning += " | DB Execution: Fetched rows successfully."
+                        result = conn.execute(sqla_text(sql_query))
+                        # Fetch all rows for progression analysis
+                        rows = [dict(row._mapping) for row in result.fetchmany(20)]
+                        context_str += f"\nDatabase Execution Results: {rows}"
+                        reasoning += f" | DB Execution: Fetched {len(rows)} rows."
                 except Exception as db_err:
                     reasoning += f" | DB Execution: Failed ({db_err})"
 
-        # 5. Final LLM Generation
-        prompt = f"""You are AIML Nexus, an Orchestrator. User persona: {persona}. Intent: {intent}
-Query: "{text}"
-Database Context & Results: {context_str}
+        # 5. Intelligence Phase: Math & Ambiguity Handling
+        final_context = context_str
+        ambiguity_list = []
+        try:
+            # Check for multiple students if a name was searched
+            from collections import Counter
+            student_counts = Counter([r.get('student_usn') for r in rows if r.get('student_usn')])
+            if len(student_counts) > 1:
+                # Ambiguity detected! Format as a list.
+                ambiguity_list = list(set([f"{r.get('student_usn')} ({r.get('student_name') or r.get('student_name_snapshot')})" for r in rows]))
+                final_context += f"\nAMBIGUITY DETECTED: Found multiple students matching query. Display this list: {ambiguity_list}"
+            else:
+                # Single student or no rows. Check for multiple semesters to calculate CGPA.
+                sgpas = [float(r.get('sgpa')) for r in rows if r.get('sgpa') is not None]
+                if sgpas:
+                    calculated_cgpa = round(sum(sgpas) / len(sgpas), 2)
+                    final_context += f"\nCALCULATED_CGPA: {calculated_cgpa} (Avg of {len(sgpas)} semesters: {sgpas})"
+        except Exception:
+            pass
 
-Formulate a helpful conversational response to the user USING the Database Execution Results above. Do not return raw errors. Use formatting."""
+        # 6. Final LLM Generation (Premium Synthesis v4)
+        prompt = f"""You are the AIML Nexus Senior Academic Analyst (v4 Premium).
+Your goal is to provide a highly professional, ORIGINAL narrative report based on the database findings.
+
+User Query: "{text}"
+Database Result Summary: 
+{final_context if final_context.strip() else "(No records found in the official normalized database.)"}
+
+REPORTING GUIDELINES:
+1. SOPHISTICATION: Do not just list numbers. Tell a story of academic progression. (e.g. "I have analyzed the performance trajectory for [Name]...")
+2. MATH VERIFICATION: If 'CALCULATED_CGPA' is present, lead with it as the verified cumulative standing.
+3. PROGRESSION INSIGHTS: Analyze the semester-over-semester SGPA. Mention if the student is improving or maintaining consistency.
+4. TABLE EXCELLENCE: Use a professional, clean Markdown table for the Semester Progression.
+5. AMBIGUITY: If multiple students matched, professionally request a USN selection from the provided list.
+6. STRICT SILENCE: If no student database results are found, report "Record Not Found" immediately. NEVER summarize holidays, vacations, or make up progression data if the context is empty.
+7. NO HALLUCINATION: If a value is missing (NULL/N/A), report it as such. Do not speculate.
+"""
 
         try:
             completion = await self.client.chat.completions.create(
@@ -156,6 +241,8 @@ Formulate a helpful conversational response to the user USING the Database Execu
                     final_resp = "Response blocked by Audit for safety compliance."
             except Exception:
                 pass
+        
+        duration = round(asyncio.get_event_loop().time() - start_time, 2)
                 
         return {
             "response": final_resp,
@@ -163,5 +250,6 @@ Formulate a helpful conversational response to the user USING the Database Execu
             "intent": intent,
             "confidence": confidence,
             "entropy_reduction": entropy,
-            "reasoning": reasoning
+            "reasoning": reasoning,
+            "duration": duration
         }

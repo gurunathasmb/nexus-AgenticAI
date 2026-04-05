@@ -10,12 +10,18 @@ const API_BASE = getApiBase();
 const PERSONAS = ['default', 'student', 'faculty', 'parent', 'recruiter'];
 
 function Chatbot() {
-  const [messages, setMessages] = useState([
-    { text: 'Hello! I am your AIML Nexus assistant. How can I help you today? You can ask about your results, timetable, attendance, or fees.', sender: 'bot' }
-  ]);
+  const [messages, setMessages] = useState(() => {
+    const saved = localStorage.getItem('nexusMessages');
+    return saved ? JSON.parse(saved) : [{ text: 'Hello! I am your AIML Nexus assistant. How can I help you today? You can ask about your results, timetable, attendance, or fees.', sender: 'bot' }];
+  });
   const [input, setInput] = useState('');
-  const [chatHistory, setChatHistory] = useState([]);
-  const [currentChatId, setCurrentChatId] = useState(null);
+  const [chatHistory, setChatHistory] = useState(() => {
+    const saved = localStorage.getItem('nexusChatHistory');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [currentChatId, setCurrentChatId] = useState(() => {
+    return localStorage.getItem('nexusCurrentChatId') || null;
+  });
   const [sessionId, setSessionId] = useState(null);
   const [isListening, setIsListening] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -36,6 +42,18 @@ function Chatbot() {
   };
 
   useEffect(scrollToBottom, [messages]);
+
+  useEffect(() => {
+    localStorage.setItem('nexusMessages', JSON.stringify(messages));
+  }, [messages]);
+
+  useEffect(() => {
+    localStorage.setItem('nexusChatHistory', JSON.stringify(chatHistory));
+  }, [chatHistory]);
+
+  useEffect(() => {
+    localStorage.setItem('nexusCurrentChatId', currentChatId || '');
+  }, [currentChatId]);
 
   useEffect(() => {
     if (transcript) {
@@ -127,18 +145,39 @@ function Chatbot() {
     }
 
     setLoading(true);
-    const backendResponse = await sendToBackend(currentInput);
+    
+    // Detect if this is a modification request (add, insert, update, save, edit)
+    const isModification = /\b(add|insert|update|save|edit|delete)\b/i.test(currentInput);
+    const userObj = JSON.parse(localStorage.getItem('user') || '{}');
+    const userEmail = userObj.email || 'guest@nexus.ai';
+
+    let backendResponse;
+    if (isModification) {
+      try {
+        const res = await fetch(`${API_BASE}/chat/modify?text=${encodeURIComponent(currentInput)}&email=${encodeURIComponent(userEmail)}`, { method: 'POST' });
+        const data = await res.json();
+        backendResponse = { 
+          response: `${data.message}${data.sql ? `\n\n**Executed SQL:** \`${data.sql}\`` : ""}`,
+          intent: "modification"
+        };
+      } catch (err) {
+        backendResponse = { response: "Failed to process modification. Backend might be offline." };
+      }
+    } else {
+      backendResponse = await sendToBackend(currentInput);
+    }
 
     let botMessage;
     if (backendResponse && backendResponse.response) {
       botMessage = {
         text: backendResponse.response,
         sender: 'bot',
-        agent: backendResponse.sender || 'agent',
+        agent: backendResponse.sender || (isModification ? 'db_modifier' : 'agent'),
         intent: backendResponse.intent,
         confidence: backendResponse.confidence,
         entropy_reduction: backendResponse.entropy_reduction,
         reasoning: backendResponse.reasoning,
+        metadata: backendResponse,
       };
     } else {
       botMessage = { text: "Error connecting to service. Please try again.", sender: 'bot', agent: 'system' };
@@ -146,9 +185,19 @@ function Chatbot() {
 
     const finalMessages = [...newMessages, botMessage];
     setMessages(finalMessages);
-    setChatHistory(prev => prev.map(chat =>
-      chat.id === currentChatId ? { ...chat, messages: finalMessages } : chat
-    ));
+    
+    // Correctly update history:
+    setChatHistory(prev => {
+      const updated = prev.map(chat =>
+        chat.id === (currentChatId || Date.now().toString()) ? { ...chat, messages: finalMessages } : chat
+      );
+      // If it was a new chat that didn't get into history yet (race condition), add it
+      if (!updated.find(c => c.id === currentChatId)) {
+         return [{ id: currentChatId, title: currentInput.slice(0,30), messages: finalMessages, timestamp: new Date() }, ...updated];
+      }
+      return updated;
+    });
+
     setLoading(false);
   };
 
@@ -189,7 +238,7 @@ function Chatbot() {
               }}
             >
               <div style={{ fontWeight: '600', fontSize: '0.95rem', marginBottom: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chat.title}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{chat.timestamp.toLocaleDateString()}</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{new Date(chat.timestamp).toLocaleDateString()}</div>
             </div>
           ))}
         </div>
@@ -249,6 +298,17 @@ function Chatbot() {
                     {msg.text}
                   </ReactMarkdown>
                 </div>
+                {msg.sender === 'bot' && msg.metadata?.duration && (
+                  <div style={{ 
+                    fontSize: '0.65rem', 
+                    opacity: 0.6, 
+                    textAlign: 'right', 
+                    marginTop: '4px',
+                    fontFamily: 'monospace' 
+                  }}>
+                    Took: {msg.metadata.duration}s
+                  </div>
+                )}
               </div>
             </div>
           ))}

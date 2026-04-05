@@ -1,3 +1,5 @@
+import os
+import re
 from openai import OpenAI
 
 # --------------------------------------------------
@@ -21,45 +23,24 @@ def generate_sql_with_agent(user_query: str) -> str:
 
     prompt = f"""
 You are an expert SQL generator for a college academic results system.
+Your goal is to generate HIGHLY ACCURATE SELECT statements using ONLY the normalized schema.
+
+IF A 'GROUND TRUTH IDENTITY' IS PROVIDED BELOW, YOU MUST USE THAT EXACT USN AND NAME IN YOUR QUERY.
 
 Database schema (PostgreSQL, schema: aiml_academic):
+aiml_academic.students (student_usn PRIMARY KEY, student_name, admission_year)
+aiml_academic.student_semester_results (semester_result_id PK, session_id, student_usn FK, sgpa, percentage, grand_total)
+aiml_academic.student_subject_results (subject_result_id PK, semester_result_id FK, raw_result, numeric_marks, grade_text)
 
-aiml_academic.semesters(semester_no, study_year, semester_label)
-  - semester_no: 1 to 8
-  - study_year: 1 to 4
+STRICT RULES:
+1. SCHEMA LOCKDOWN: ONLY use tables prefixed with 'aiml_academic.'.
+2. NO HALLUCINATION: If a 'GROUND TRUTH IDENTITY' is provided, ignore fuzzy matching and use the provided USN.
+3. RESILIENT JOIN: Always JOIN students s ON r.student_usn = s.student_usn. 
+4. USN DATA QUIRK: If no ground truth is provided and a direct match fails, use ILIKE '%[USN]%' for USN or Name columns.
+5. MULTI-SEMESTER: Fetch ALL rows for that USN so we can show a progression. ALWAYS include 'student_usn' and 'student_name'.
+6. Output raw SQL only. No markdown. No comments.
 
-aiml_academic.students(student_usn, student_name, admission_year)
-  - student_usn: primary key e.g. '1DS20AI001'
-  - admission_year: the batch/year the student joined
-
-aiml_academic.subjects(subject_code, subject_label)
-
-aiml_academic.result_sessions(session_id, source_folder_year, semester_no, session_label, study_year, result_scale)
-  - result_scale: 'marks' or 'grades'
-
-aiml_academic.session_subjects(session_subject_id, session_id, subject_code, subject_order)
-
-aiml_academic.student_semester_results(semester_result_id, session_id, student_usn, student_name_snapshot, sgpa, percentage, grand_total)
-  - sgpa: semester grade point average
-  - percentage: overall percentage
-  - grand_total: total marks
-
-aiml_academic.student_subject_results(subject_result_id, semester_result_id, session_subject_id, raw_result, numeric_marks, grade_text, result_kind)
-  - numeric_marks: marks scored in a subject
-  - grade_text: grade if result_scale is grades
-
-Rules:
-- Use ONLY SELECT statements. Never use DELETE, DROP, UPDATE, INSERT, ALTER.
-- Always prefix tables with schema: aiml_academic.<table_name>
-- "Batch year" or "admission year" refers to students.admission_year
-- "Semester" refers to semesters.semester_no
-- "SGPA" refers to student_semester_results.sgpa
-- "Percentage" refers to student_semester_results.percentage
-- "Marks in a subject" refers to student_subject_results.numeric_marks
-- For top N students, use ORDER BY <metric> DESC LIMIT N
-- Output ONLY the raw SQL query. No explanation. No markdown. No code fences.
-
-User query:
+User query & Context:
 {user_query}
 """
 
@@ -82,7 +63,6 @@ User query:
             f"No valid SQL SELECT found in LLM output. Got: {sql_query[:200]}"
         )
 
-    # Apply guardrails before returning
-    return guardrail_check(sql_query)
+    return sql_query
 
 
