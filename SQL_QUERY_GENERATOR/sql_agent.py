@@ -27,23 +27,23 @@ def generate_sql_with_agent(user_query: str) -> str:
     client = OpenAI(**kwargs)
 
     prompt = f"""
-You are an expert SQL generator for a college academic results system.
-Your goal is to generate HIGHLY ACCURATE SELECT statements using ONLY the normalized schema.
+### MISSION: GENERATE RAW DATA SELECT QUERIES ONLY.
 
-IF A 'GROUND TRUTH IDENTITY' IS PROVIDED BELOW, YOU MUST USE THAT EXACT USN AND NAME IN YOUR QUERY.
+STRICT RULES (FAILURE TO FOLLOW = CRASH):
+1. FORBIDDEN: NEVER use AVG(), SUM(), MAX(), or COUNT().
+2. FORBIDDEN: NEVER use GROUP BY or HAVING.
+3. FORBIDDEN: DO NOT calculate CGPA in SQL. The Python orchestrator handles all math.
+4. SCHEMA LOCKDOWN: ONLY use 'aiml_academic.' tables.
+5. IDENTITY ANCHOR: If 'GROUND TRUTH IDENTITY' is provided, use that EXACT USN.
+6. RESILIENT JOIN: Always JOIN students s ON r.student_usn = s.student_usn. 
+7. TABLE MAPPING: 'sgpa' is in 'student_semester_results'. 'numeric_marks' is in 'student_subject_results'.
+8. Output RAW SQL only. No markdown. No comments.
 
-Database schema (PostgreSQL, schema: aiml_academic):
-aiml_academic.students (student_usn PRIMARY KEY, student_name, admission_year)
-aiml_academic.student_semester_results (semester_result_id PK, session_id, student_usn FK, sgpa, percentage, grand_total)
-aiml_academic.student_subject_results (subject_result_id PK, semester_result_id FK, raw_result, numeric_marks, grade_text)
-
-STRICT RULES:
-1. SCHEMA LOCKDOWN: ONLY use tables prefixed with 'aiml_academic.'.
-2. NO HALLUCINATION: If a 'GROUND TRUTH IDENTITY' is provided, ignore fuzzy matching and use the provided USN.
-3. RESILIENT JOIN: Always JOIN students s ON r.student_usn = s.student_usn. 
-4. USN DATA QUIRK: If no ground truth is provided and a direct match fails, use ILIKE '%[USN]%' for USN or Name columns.
-5. MULTI-SEMESTER: Fetch ALL rows for that USN so we can show a progression. ALWAYS include 'student_usn' and 'student_name'.
-6. Output raw SQL only. No markdown. No comments.
+REQUIRED PATTERN (FOLLOW THIS 100%):
+SELECT s.student_usn, s.student_name, r.sgpa, r.percentage, r.grand_total 
+FROM aiml_academic.students s 
+JOIN aiml_academic.student_semester_results r ON s.student_usn = r.student_usn 
+WHERE s.student_usn = '[USN]'
 
 User query & Context:
 {user_query}
