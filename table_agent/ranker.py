@@ -11,8 +11,8 @@ from psycopg2.extras import RealDictCursor
 
 
 def _database_url() -> str:
-    # Use Postgres globally across the nexus platform
-    return os.getenv("AIML_RESULTS_DATABASE_URL", "postgresql://admin01:aiml1203@185.197.251.236:5432/nexus")
+    # Use Postgres globally across the nexus platform - Sourced from Master .env
+    return os.getenv("AIML_RESULTS_DATABASE_URL")
 
 
 def _sqlite_db_path() -> str:

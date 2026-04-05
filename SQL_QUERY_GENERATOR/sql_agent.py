@@ -1,6 +1,11 @@
 import os
 import re
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load master .env from root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 # --------------------------------------------------
 # Main agent function
@@ -9,7 +14,7 @@ def generate_sql_with_agent(user_query: str) -> str:
     """
     Accepts a natural language query and returns a safe SQL query directly via LLM.
     """
-    api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+    api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("OPENAI_API_KEY")
     is_nv = api_key.startswith("nvapi-")
     
     kwargs = {"api_key": api_key, "timeout": 10.0}

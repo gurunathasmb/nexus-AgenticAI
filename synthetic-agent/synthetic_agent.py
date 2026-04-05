@@ -2,6 +2,14 @@ import os
 import sys
 import asyncio
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
+
+# Load master .env from root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+# Add parent path to allow cross-folder imports of sibling agents
+sys.path.append(PROJECT_ROOT)
 
 # Add parent path to allow cross-folder imports of sibling agents
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,10 +48,11 @@ except ImportError:
 try:
     from table_agent.ranker import _database_url
 except ImportError:
-    _database_url = lambda: os.getenv("AIML_RESULTS_DATABASE_URL", "postgresql://admin01:aiml1203@185.197.251.236:5432/nexus")
+    _database_url = lambda: os.getenv("AIML_RESULTS_DATABASE_URL")
 
-# Global DB URL for cross-agent consistency
-DB_URL = _database_url() if _database_url else "postgresql://admin01:aiml1203@185.197.251.236:5432/nexus"
+# Global DB URL - Strictly from Environment in Production
+DB_URL = os.getenv("AIML_RESULTS_DATABASE_URL")
+HOST_EMAIL = os.getenv("HOST_EMAIL", "gurunathagoudambiradar@gmail.com")
 
 class Message:
     def __init__(self, text, metadata=None, sender="user"):
@@ -208,20 +217,20 @@ class SyntheticAgent:
 
         # 6. Final LLM Generation (Premium Synthesis v4)
         prompt = f"""You are the AIML Nexus Senior Academic Analyst (v4 Premium).
-Your goal is to provide a highly professional, ORIGINAL narrative report based on the database findings.
+Your goal is to provide a highly professional, ORIGINAL narrative report OR a friendly conversational response.
 
 User Query: "{text}"
+Detected Intent: {intent}
 Database Result Summary: 
-{final_context if final_context.strip() else "(No records found in the official normalized database.)"}
+{final_context if final_context.strip() else "(No records found.)"}
 
 REPORTING GUIDELINES:
-1. SOPHISTICATION: Do not just list numbers. Tell a story of academic progression. (e.g. "I have analyzed the performance trajectory for [Name]...")
-2. MATH VERIFICATION: If 'CALCULATED_CGPA' is present, lead with it as the verified cumulative standing.
-3. PROGRESSION INSIGHTS: Analyze the semester-over-semester SGPA. Mention if the student is improving or maintaining consistency.
-4. TABLE EXCELLENCE: Use a professional, clean Markdown table for the Semester Progression.
-5. AMBIGUITY: If multiple students matched, professionally request a USN selection from the provided list.
-6. STRICT SILENCE: If no student database results are found, report "Record Not Found" immediately. NEVER summarize holidays, vacations, or make up progression data if the context is empty.
-7. NO HALLUCINATION: If a value is missing (NULL/N/A), report it as such. Do not speculate.
+1. CONVERSATIONAL FREEDOM: If the user is just saying 'Hi', 'Thanks', or chatting (Detected Intent: CLARIFICATION_REQUIRED or similar), respond naturally and professionally. Do NOT say 'Record Not Found'.
+2. ACADEMIC SOPHISTICATION: If students are found, tell a story of academic progression. (e.g. "I have analyzed the performance trajectory for [Name]...")
+3. MATH VERIFICATION: If 'CALCULATED_CGPA' is present, lead with it as the verified cumulative standing.
+4. TABLE EXCELLENCE: Use professional Markdown tables for any academic results.
+5. STRICT SILENCE (DATA ONLY): If the user asks for a SPECIFIC student/result and nothing is found, report "Record Not Found". NEVER make up progression data if the academic context is empty.
+6. NO HALLUCINATION: If a value is missing (NULL/N/A), report it as such.
 """
 
         try:

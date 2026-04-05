@@ -4,12 +4,17 @@ import asyncio
 from openai import AsyncOpenAI
 from sqlalchemy import create_engine, text
 from table_agent.ranker import _database_url
+from dotenv import load_dotenv
 
-HOST_EMAIL = "gurunathagoudambiradar@gmail.com"
+# Load master .env from root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+HOST_EMAIL = os.getenv("HOST_EMAIL", "gurunathagoudambiradar@gmail.com")
 
 class DatabaseModifier:
     def __init__(self):
-        api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+        api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("OPENAI_API_KEY")
         is_nv = api_key.startswith("nvapi-")
         
         kwargs = {"api_key": api_key, "timeout": 10.0}

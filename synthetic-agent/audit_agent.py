@@ -1,11 +1,16 @@
 import os
 import re
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load master .env from root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 class AuditAgent:
     def __init__(self):
-        self.api_key = os.getenv("NVIDIA_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-        self.base_url = "https://integrate.api.nvidia.com/v1" if "NVIDIA" in os.environ or (not os.getenv("OPENAI_API_KEY") and self.api_key) else None
+        self.api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.base_url = "https://integrate.api.nvidia.com/v1" if self.api_key and self.api_key.startswith("nvapi-") else None
         
         kwargs = {"api_key": self.api_key, "timeout": 10.0}
         if self.base_url:
