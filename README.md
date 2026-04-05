@@ -11,7 +11,7 @@ The platform is now **strictly environment-driven** for production security.
 2. Fill in your master keys:
    - `NVIDIA_API_KEY`: Your LLaMA-3.1 inference key.
    - `AIML_RESULTS_DATABASE_URL`: Your Postgres connection string.
-   - `HOST_EMAIL`: Your official administrator email.
+   - `HOST_EMAIL`: gurunathagoudambiradar@gmail.com
 
 ### 2. Start the Backend (Terminal 1)
 1. Open PowerShell in `synthetic-agent`.
