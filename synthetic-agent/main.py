@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import uuid
 import sys
 import os
+from dotenv import load_dotenv
+
+# Load root .env for backend config values
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(ROOT_DIR, '.env'))
 
 # Add parent dir to path so we can import other agents
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -79,6 +84,19 @@ async def modify_database(text: str, email: str):
     """
     result = await db_modifier.process_modification(text, email)
     return result
+
+@app.get("/audit/metrics")
+async def get_audit_metrics():
+    if agent.audit_agent:
+        return agent.audit_agent.get_metrics()
+    return {"error": "Audit agent not available."}
+
+@app.post("/audit/feedback")
+async def submit_audit_feedback(session_id: str, feedback: str, email: str = "guest@nexus.ai"):
+    if agent.audit_agent:
+        entry = agent.audit_agent.submit_feedback(session_id, feedback, email)
+        return {"status": "ok", "entry": entry}
+    return {"status": "error", "reason": "Audit agent not available."}
 
 if __name__ == "__main__":
     import uvicorn

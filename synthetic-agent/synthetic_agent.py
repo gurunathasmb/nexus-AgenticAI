@@ -20,7 +20,7 @@ except ImportError:
     HierarchicalIntentAgent = None
 
 try:
-    from audit_agent import AuditAgent
+    from Audit_agent.audit_agent import AuditAgent
 except ImportError:
     AuditAgent = None
 
@@ -263,15 +263,37 @@ REPORTING GUIDELINES:
             final_resp = f"I failed to generate a response via LLM gracefully. Error: {e}"
 
         # 6. Audit Pipeline Phase
+        audit_passed = True
         if self.audit_agent:
             try:
                 a_res = await asyncio.to_thread(self.audit_agent.audit, text, sql_query, final_resp)
-                if not a_res["passed"]:
+                audit_passed = a_res.get("passed", True)
+                if not audit_passed:
                     final_resp = "Response blocked by Audit for safety compliance."
             except Exception:
-                pass
-        
+                audit_passed = True
+
         duration = round(asyncio.get_event_loop().time() - start_time, 2)
+
+        # 7. Metrics capture for dashboard and review
+        if self.audit_agent:
+            try:
+                outcomes = {
+                    "Intent_Agent": bool(intent_res),
+                    "Table_Agent": bool(table_res and getattr(table_res, 'metadata', {}).get('ranked_tables')),
+                    "Column_Pruning_Agent": bool('col_res' in locals() and getattr(col_res, 'metadata', {}).get('kept')),
+                    "SQL_Generator": bool(sql_query),
+                    "SQL_Validator": bool(self.validator is None or 'is_valid' in locals() and is_valid),
+                    "Audit_Agent": audit_passed,
+                }
+                self.audit_agent.record_request(
+                    session_id=None,
+                    duration=duration,
+                    agent_outcomes=outcomes,
+                    audit_passed=audit_passed,
+                )
+            except Exception:
+                pass
                 
         return {
             "response": final_resp,

@@ -25,6 +25,8 @@ function Chatbot() {
   const [sessionId, setSessionId] = useState(null);
   const [isListening, setIsListening] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const [feedbackStatus, setFeedbackStatus] = useState('');
   const [agents, setAgents] = useState([]);
   const [persona, setPersona] = useState('default');
   const navigate = useNavigate();
@@ -113,6 +115,30 @@ function Chatbot() {
       resetTranscript();
       SpeechRecognition.startListening({ continuous: true });
       setIsListening(true);
+    }
+  };
+
+  const handleSubmitFeedback = async () => {
+    if (!feedback.trim()) {
+      setFeedbackStatus('Please enter your feedback before submitting.');
+      return;
+    }
+    try {
+      const userObj = JSON.parse(localStorage.getItem('user') || '{}');
+      const email = userObj.email || 'guest@nexus.ai';
+      const res = await fetch(`${API_BASE}/audit/feedback?session_id=${encodeURIComponent(sessionId || 'unknown')}&feedback=${encodeURIComponent(feedback)}&email=${encodeURIComponent(email)}`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        setFeedbackStatus('Thank you for your feedback!');
+        setFeedback('');
+      } else {
+        setFeedbackStatus('Could not submit feedback.');
+      }
+    } catch (err) {
+      console.warn('Feedback submit failed:', err.message);
+      setFeedbackStatus('Failed to submit feedback.');
     }
   };
 
@@ -274,7 +300,13 @@ function Chatbot() {
             >
               {PERSONAS.map(p => <option key={p} value={p}>{p.toUpperCase()}</option>)}
             </select>
-            <button className="glass-button danger" onClick={() => navigate('/')} style={{ padding: '6px 16px', fontSize: '0.85rem' }}>Logout</button>
+            <button className="glass-button secondary" onClick={() => navigate(isAdmin ? '/dashboard' : '/login')} style={{ padding: '6px 16px', fontSize: '0.85rem' }}>
+              Admin Dashboard
+            </button>
+            <button className="glass-button danger" onClick={() => {
+              localStorage.removeItem('user');
+              navigate('/');
+            }} style={{ padding: '6px 16px', fontSize: '0.85rem' }}>Logout</button>
           </div>
         </header>
 
@@ -336,6 +368,20 @@ function Chatbot() {
           <button className="send-btn" onClick={handleSend} disabled={loading}>
             {loading ? '...' : 'SEND'}
           </button>
+        </div>
+
+        <div className="feedback-container">
+          <textarea
+            className="feedback-input"
+            rows={3}
+            value={feedback}
+            placeholder="Share your feedback on this session or agent performance..."
+            onChange={(e) => setFeedback(e.target.value)}
+          />
+          <div className="feedback-actions">
+            <button className="feedback-btn" onClick={handleSubmitFeedback}>Submit Feedback</button>
+            {feedbackStatus && <span className="feedback-status">{feedbackStatus}</span>}
+          </div>
         </div>
       </div>
     </div>
